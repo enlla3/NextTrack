@@ -1,34 +1,30 @@
-require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
-const recommendRouter = require("./routes/recommend.js");
-const ytSearchRouter = require("./routes/ytSearch.js");
+const recommendRoute = require("./routes/recommend");
+const ytSearchRoute = require("./routes/ytSearch");
 
 const app = express();
 
-app.use(cors());
+// Trust Render’s proxy so express-rate-limit can read X-Forwarded-For
+app.set("trust proxy", 1);
 
-app.options("*", cors());
+// Basic rate‐limiting
+app.use(
+	rateLimit({
+		windowMs: 60_000, // 1 minute
+		max: 60, // limit each IP to 60 requests per window
+	})
+);
+
+app.use(cors());
 app.use(express.json());
 
-// Rate limiter
-const limiter = rateLimit({
-	windowMs: 60 * 1000,
-	max: parseInt(process.env.RATE_LIMIT_PER_MINUTE, 10) || 60,
-	message: { error: "Too many requests, please try again later." },
-});
-app.use(limiter);
-
-// Mount our recommendation route
-app.use("/api/recommend", recommendRouter);
-app.use("/api/yt-search", ytSearchRouter);
+// Mount the routes
+app.use("/api/recommend", recommendRoute);
+app.use("/api/yt-search", ytSearchRoute);
 
 const PORT = process.env.PORT || 3000;
-if (require.main === module) {
-	app.listen(PORT, () => {
-		console.log(`NextTrack prototype running on port ${PORT}`);
-	});
-}
-
-module.exports = app; // Export for testing
+app.listen(PORT, () => {
+	console.log(`API listening on port ${PORT}`);
+});
