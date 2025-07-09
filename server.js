@@ -4,9 +4,8 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const recommendRouter = require("./routes/recommend.js");
 
-app.use(cors());
-
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 // Rate limiter
