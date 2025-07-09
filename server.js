@@ -1,8 +1,10 @@
-// server.js
 require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const recommendRouter = require("./routes/recommend.js");
+
+app.use(cors());
 
 const app = express();
 app.use(express.json());
