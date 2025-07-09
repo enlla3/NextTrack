@@ -1,0 +1,43 @@
+curl -X POST http://localhost:3000/api/recommend \
+  -H "Content-Type: application/json" \
+  -d '{
+    "track_ids": [
+      { "title": "Sugar",       "artist": "Maroon 5" }
+    ]
+  }'
+
+    curl -X POST http://localhost:3000/api/recommend \
+  -H "Content-Type: application/json" \
+  -d '{
+    "track_ids": [
+      { "title": "Sugar",       "artist": "Maroon 5" },
+      { "title": "Thriller",       "artist": "Michael Jackson" },
+      { "title": "Without Me",       "artist": "Eminem" }
+    ]
+  }'
+
+
+  curl -X POST http://localhost:3000/api/recommend \
+  -H "Content-Type: application/json" \
+  -d '{
+    "track_ids": [
+      { "title": "Suga",       "artist": "Maroon 5" }
+    ]
+  }'
+
+    curl -X POST http://localhost:3000/api/recommend \
+  -H "Content-Type: application/json" \
+  -d '{
+    "track_ids": [
+
+    ]
+  }'
+
+
+  curl -X POST http://localhost:3000/api/recommend \
+  -H "Content-Type: application/json" \
+  -d '{
+    "track_ids": [
+      { "title": "Blue",       "artist": "Yung Kai" }
+    ]
+  }'
