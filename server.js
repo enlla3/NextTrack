@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const recommendRouter = require("./routes/recommend.js");
+const ytSearchRouter = require("./routes/ytSearch.js");
 
 const app = express();
 
@@ -21,6 +22,7 @@ app.use(limiter);
 
 // Mount our recommendation route
 app.use("/api/recommend", recommendRouter);
+app.use("/api/yt-search", ytSearchRouter);
 
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
