@@ -24,6 +24,8 @@ export default [
 				expect: "readonly",
 				beforeEach: "readonly",
 				afterEach: "readonly",
+				beforeAll: "readonly",
+				afterAll: "readonly",
 			},
 		},
 
