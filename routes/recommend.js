@@ -18,7 +18,6 @@ const DELIM = "|||";
 
 // 1) Autocorrect via track.search
 async function searchTrack(title, artist) {
-	console.log(`[searchTrack] "${title}" by "${artist}"`);
 	try {
 		const resp = await axios.get(LASTFM_BASE_URL, {
 			params: {
@@ -75,7 +74,7 @@ async function fetchSimilarTracks(title, artist) {
 	}
 }
 
-// 3) Fetch top tags (optionally all)
+// 3) Fetch top tags
 async function fetchTopTags(title, artist, returnAll = false) {
 	try {
 		const resp = await axios.get(LASTFM_BASE_URL, {
@@ -201,20 +200,41 @@ function applyPreferenceBoost(track, preferences, tags) {
 	return boost;
 }
 
-// 8) Rank by Borda with matchScore tie-break
-function rankByBorda(seedsMap, matchScoreMap) {
+// 8) Unweighted Borda (original)
+/*
+// function rankByBorda(seedsMap, matchScoreMap) {
+//   const scores = {};
+//   for (const list of Object.values(seedsMap)) {
+//     const L = list.length;
+//     list.forEach((key, i) => {
+//       scores[key] = (scores[key] || 0) + (L - i);
+//     });
+//   }
+//   return Object.keys(scores).sort((a, b) => {
+//     if (scores[b] !== scores[a]) {
+//       return scores[b] - scores[a];
+//     }
+//     return (matchScoreMap[b] || 0) - (matchScoreMap[a] || 0);
+//   });
+// }
+*/
+
+// 8b) Weighted Borda
+function rankByWeightedBorda(seedsMap, weightMap, matchScoreMap) {
 	const scores = {};
 	for (const list of Object.values(seedsMap)) {
 		const L = list.length;
 		list.forEach((key, i) => {
-			scores[key] = (scores[key] || 0) + (L - i);
+			const bordaPoints = L - i;
+			const weight = weightMap[key] || 1;
+			scores[key] = (scores[key] || 0) + bordaPoints * weight;
 		});
 	}
 	return Object.keys(scores).sort((a, b) => {
 		if (scores[b] !== scores[a]) {
 			return scores[b] - scores[a];
 		}
-		// tie-break by matchScore
+		// tie-break by matchScore as before
 		return (matchScoreMap[b] || 0) - (matchScoreMap[a] || 0);
 	});
 }
@@ -231,6 +251,7 @@ router.post("/", async (req, res) => {
 
 		const seedsMap = {};
 		const matchScoreMap = {};
+		const weightMap = {};
 
 		for (const entry of track_ids) {
 			if (!entry.title || !entry.artist) {
@@ -249,7 +270,7 @@ router.post("/", async (req, res) => {
 			const seedKey = `${artist}${DELIM}${title}`;
 			let similarList = await fetchSimilarTracks(title, artist);
 
-			// Fallback tags → artist
+			// Fallback tags → artist → global
 			if (similarList.length === 0) {
 				const topTag = await fetchTopTags(title, artist);
 				if (topTag) {
@@ -279,25 +300,31 @@ router.post("/", async (req, res) => {
 					matchScore: t.matchScore || 0,
 				});
 			}
-			// sort by boost then matchScore
+
+			// Sort per preferences then matchScore
 			enhanced.sort((a, b) =>
 				b.scoreBoost !== a.scoreBoost
 					? b.scoreBoost - a.scoreBoost
 					: b.matchScore - a.matchScore
 			);
 
-			// store only keys in seedsMap
+			// Store only keys in seedsMap
 			seedsMap[seedKey] = enhanced.map((e) => e.key);
+
+			// Build weightMap for weighted Borda
+			for (const e of enhanced) {
+				weightMap[e.key] = 1 + e.scoreBoost;
+			}
 		}
 
-		// remove any empty seeds
+		// Remove any empty seeds
 		for (const k of Object.keys(seedsMap)) {
 			if (!Array.isArray(seedsMap[k]) || seedsMap[k].length === 0) {
 				delete seedsMap[k];
 			}
 		}
 
-		// global fallback
+		// Global fallback if no seeds produced
 		if (Object.keys(seedsMap).length === 0) {
 			const globalTop = await fetchGlobalTopTrack();
 			if (globalTop) {
@@ -310,8 +337,14 @@ router.post("/", async (req, res) => {
 				.json({ error: "No recommendations available." });
 		}
 
-		// get sorted keys by Borda + tie-break
-		const rankedKeys = rankByBorda(seedsMap, matchScoreMap);
+		// Rank by weighted Borda (instead of the old unweighted)
+		//		const rankedKeys = rankByBorda(seedsMap, matchScoreMap);
+		const rankedKeys = rankByWeightedBorda(
+			seedsMap,
+			weightMap,
+			matchScoreMap
+		);
+
 		const top3 = rankedKeys.slice(0, 3).map((k) => {
 			const [artist, title] = k.split(DELIM);
 			return { artist, title };
