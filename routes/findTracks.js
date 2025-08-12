@@ -1,4 +1,3 @@
-// routes/findTracks.js
 const express = require("express");
 const axios = require("axios");
 
@@ -13,16 +12,18 @@ if (!LASTFM_API_KEY) {
 }
 
 const LASTFM_BASE_URL = "http://ws.audioscrobbler.com/2.0/";
-const SEARCH_FETCH_LIMIT = 30; // how many raw results to fetch from Last.fm
-const TOPTRACKS_LIMIT = 50; // cap for artist.getTopTracks
-const OUTPUT_LIMIT_MAX = 50; // max the client can ask for
-const TAG_LOOKUPS_MAX = 25; // to avoid hammering Last.fm when filtering by language
+const SEARCH_FETCH_LIMIT = 30;
+const TOPTRACKS_LIMIT = 50;
+const OUTPUT_LIMIT_MAX = 50;
+const TAG_LOOKUPS_MAX = 25;
 const TIMEOUT_MS = 10000;
 
 const toL = (s) => (s || "").trim().toLowerCase();
 
-/** track.search by title only */
-async function searchByTitleOnly(title) {
+async function searchByTitleOnly(
+	title,
+	{ page = 1, limit = SEARCH_FETCH_LIMIT }
+) {
 	try {
 		const resp = await axios.get(LASTFM_BASE_URL, {
 			params: {
@@ -30,26 +31,25 @@ async function searchByTitleOnly(title) {
 				track: title,
 				api_key: LASTFM_API_KEY,
 				format: "json",
-				limit: SEARCH_FETCH_LIMIT,
+				limit,
+				page,
 				autocorrect: 1,
 			},
 			timeout: TIMEOUT_MS,
 		});
 		const matches = resp.data?.results?.trackmatches?.track;
 		const arr = Array.isArray(matches) ? matches : matches ? [matches] : [];
-		return arr.map((t) => ({
-			title: t.name,
-			artist: t.artist,
-		}));
+		return arr.map((t) => ({ title: t.name, artist: t.artist }));
 	} catch {
 		return [];
 	}
 }
 
-/** artist.search → artist.getTopTracks */
-async function topTracksByArtistOnly(artist) {
+async function topTracksByArtistOnly(
+	artist,
+	{ page = 1, limit = TOPTRACKS_LIMIT }
+) {
 	try {
-		// Resolve artist (best match)
 		const search = await axios.get(LASTFM_BASE_URL, {
 			params: {
 				method: "artist.search",
@@ -64,14 +64,14 @@ async function topTracksByArtistOnly(artist) {
 		const best = Array.isArray(hits) ? hits[0] : hits;
 		const resolvedArtist = best?.name || artist;
 
-		// Get top tracks
 		const top = await axios.get(LASTFM_BASE_URL, {
 			params: {
 				method: "artist.getTopTracks",
 				artist: resolvedArtist,
 				api_key: LASTFM_API_KEY,
 				format: "json",
-				limit: TOPTRACKS_LIMIT,
+				limit,
+				page,
 				autocorrect: 1,
 			},
 			timeout: TIMEOUT_MS,
@@ -87,7 +87,6 @@ async function topTracksByArtistOnly(artist) {
 	}
 }
 
-/** fetch track.getTopTags for language filtering */
 async function fetchTopTags(title, artist) {
 	try {
 		const resp = await axios.get(LASTFM_BASE_URL, {
@@ -109,7 +108,6 @@ async function fetchTopTags(title, artist) {
 	}
 }
 
-/** filter results by language (case-insensitive) with a cap on tag lookups  */
 async function filterByLanguage(tracks, language) {
 	const wanted = toL(language);
 	if (!wanted) {
@@ -124,46 +122,51 @@ async function filterByLanguage(tracks, language) {
 		})
 	);
 
-	// Keep only those with the matching language tag
-	const kept = checks.filter((c) => c.ok).map((c) => c.t);
-
-	// If we cut at TAG_LOOKUPS_MAX, we *could* scan more when we still need items,
-	// but to stay gentle on the API we’ll just return what we matched.
-	return kept;
+	return checks.filter((c) => c.ok).map((c) => c.t);
 }
 
 router.post("/", async (req, res) => {
 	try {
-		const { title, artist, language, limit = 10 } = req.body || {};
+		const {
+			title,
+			artist,
+			language,
+			limit = 10,
+			page = 1,
+		} = req.body || {};
 		const outLimit = Math.max(
 			1,
 			Math.min(OUTPUT_LIMIT_MAX, Number(limit) || 10)
 		);
+		const pageNum = Math.max(1, Number(page) || 1);
 
 		if ((!title && !artist) || (title && artist)) {
 			return res.status(400).json({
-				error: "Provide exactly one of 'title' or 'artist'. Optional: 'language', 'limit'.",
+				error: "Provide exactly one of 'title' or 'artist'. Optional: 'language', 'limit', 'page'.",
 			});
 		}
 
 		let candidates = [];
 		if (title) {
-			candidates = await searchByTitleOnly(title);
+			candidates = await searchByTitleOnly(title, {
+				page: pageNum,
+				limit: outLimit,
+			});
 		} else {
-			candidates = await topTracksByArtistOnly(artist);
+			candidates = await topTracksByArtistOnly(artist, {
+				page: pageNum,
+				limit: outLimit,
+			});
 		}
 
 		if (language) {
 			candidates = await filterByLanguage(candidates, language);
 		}
 
-		// Trim to the requested limit
 		const results = candidates.slice(0, outLimit);
-
-		if (results.length === 0) {
-			return res.status(200).json({ results: [] });
-		}
-		return res.status(200).json({ results });
+		return res
+			.status(200)
+			.json({ results, page: pageNum, limit: outLimit });
 	} catch (err) {
 		console.error("[find-tracks] Internal error:", err);
 		return res.status(500).json({ error: "Internal server error" });
