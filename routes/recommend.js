@@ -1,3 +1,4 @@
+// routes/recommend.js
 const express = require("express");
 const axios = require("axios");
 
@@ -15,6 +16,10 @@ const LASTFM_BASE_URL = "http://ws.audioscrobbler.com/2.0/";
 const SIMILAR_LIMIT = 100;
 const SEARCH_LIMIT = 1;
 const DELIM = "|||";
+
+// ------------------ helpers ------------------
+const toL = (s) => (s || "").trim().toLowerCase();
+const sameArtist = (a, b) => toL(a) === toL(b);
 
 // 1) Autocorrect via track.search
 async function searchTrack(title, artist) {
@@ -177,47 +182,20 @@ async function fetchGlobalTopTrack() {
 // 7) Apply user preference scoring
 function applyPreferenceBoost(track, preferences, tags) {
 	let boost = 0;
-	const tagSet = new Set(tags.map((t) => t.toLowerCase()));
+	const tagSet = new Set((tags || []).map((t) => t.toLowerCase()));
 	if (
-		preferences.favorite_artists?.some(
-			(a) => a.toLowerCase() === track.artist.toLowerCase()
-		)
+		preferences.favorite_artists?.some((a) => toL(a) === toL(track.artist))
 	) {
 		boost += 5;
 	}
-	if (
-		preferences.preferred_genres?.some((g) => tagSet.has(g.toLowerCase()))
-	) {
+	if (preferences.preferred_genres?.some((g) => tagSet.has(toL(g)))) {
 		boost += 3;
 	}
-	if (
-		preferences.preferred_languages?.some((l) =>
-			tagSet.has(l.toLowerCase())
-		)
-	) {
+	if (preferences.preferred_languages?.some((l) => tagSet.has(toL(l)))) {
 		boost += 2;
 	}
 	return boost;
 }
-
-// 8) Unweighted Borda (original)
-/*
-// function rankByBorda(seedsMap, matchScoreMap) {
-//   const scores = {};
-//   for (const list of Object.values(seedsMap)) {
-//     const L = list.length;
-//     list.forEach((key, i) => {
-//       scores[key] = (scores[key] || 0) + (L - i);
-//     });
-//   }
-//   return Object.keys(scores).sort((a, b) => {
-//     if (scores[b] !== scores[a]) {
-//       return scores[b] - scores[a];
-//     }
-//     return (matchScoreMap[b] || 0) - (matchScoreMap[a] || 0);
-//   });
-// }
-*/
 
 // 8b) Weighted Borda
 function rankByWeightedBorda(seedsMap, weightMap, matchScoreMap) {
@@ -234,12 +212,11 @@ function rankByWeightedBorda(seedsMap, weightMap, matchScoreMap) {
 		if (scores[b] !== scores[a]) {
 			return scores[b] - scores[a];
 		}
-		// tie-break by matchScore as before
 		return (matchScoreMap[b] || 0) - (matchScoreMap[a] || 0);
 	});
 }
 
-// ============ Main Route ============
+// ================= Main Route =================
 router.post("/", async (req, res) => {
 	try {
 		const { track_ids, preferences = {} } = req.body;
@@ -249,9 +226,15 @@ router.post("/", async (req, res) => {
 				.json({ error: "track_ids (non-empty array) is required" });
 		}
 
+		// NEW: same-artist-only flag (default false)
+		const sameArtistOnly = !!preferences.same_artist_only;
+
 		const seedsMap = {};
 		const matchScoreMap = {};
 		const weightMap = {};
+
+		// Track corrected seed artists for filtering
+		const allowedArtists = new Set();
 
 		for (const entry of track_ids) {
 			if (!entry.title || !entry.artist) {
@@ -266,28 +249,53 @@ router.post("/", async (req, res) => {
 				title = corr.correctedTitle;
 				artist = corr.correctedArtist;
 			}
-
+			allowedArtists.add(toL(artist)); // record corrected artist
 			const seedKey = `${artist}${DELIM}${title}`;
+
+			// Similar (primary)
 			let similarList = await fetchSimilarTracks(title, artist);
 
-			// Fallback tags → artist → global
+			// NEW: if sameArtistOnly, filter right away to the seed artist
+			if (sameArtistOnly && similarList.length > 0) {
+				similarList = similarList.filter((t) =>
+					sameArtist(t.artist, artist)
+				);
+			}
+
+			// Fallbacks
 			if (similarList.length === 0) {
-				const topTag = await fetchTopTags(title, artist);
-				if (topTag) {
-					const tagTracks = await fetchTagTopTracks(topTag);
-					similarList = tagTracks.map((t) => ({
-						...t,
-						matchScore: 0,
-					}));
-				} else {
+				if (sameArtistOnly) {
+					// For same-artist mode, prefer artist top tracks (same artist) over tag/global
 					const topArtist = await fetchArtistTopTrack(artist);
 					similarList = topArtist
 						? [{ ...topArtist, matchScore: 0 }]
 						: [];
+				} else {
+					// Original: tag -> artist
+					const topTag = await fetchTopTags(title, artist);
+					if (topTag) {
+						const tagTracks = await fetchTagTopTracks(topTag);
+						similarList = tagTracks.map((t) => ({
+							...t,
+							matchScore: 0,
+						}));
+					} else {
+						const topArtist = await fetchArtistTopTrack(artist);
+						similarList = topArtist
+							? [{ ...topArtist, matchScore: 0 }]
+							: [];
+					}
 				}
 			}
 
-			// Preference scoring and record matchScore
+			// If still in same-artist mode, enforce filter (in case fallback added others)
+			if (sameArtistOnly && similarList.length > 0) {
+				similarList = similarList.filter((t) =>
+					sameArtist(t.artist, artist)
+				);
+			}
+
+			// Preference scoring + maps
 			const enhanced = [];
 			for (const t of similarList) {
 				const tags = await fetchTopTags(t.title, t.artist, true);
@@ -301,49 +309,96 @@ router.post("/", async (req, res) => {
 				});
 			}
 
-			// Sort per preferences then matchScore
+			// Sort by (boost, matchScore)
 			enhanced.sort((a, b) =>
 				b.scoreBoost !== a.scoreBoost
 					? b.scoreBoost - a.scoreBoost
 					: b.matchScore - a.matchScore
 			);
 
-			// Store only keys in seedsMap
+			// Store per-seed candidate keys
 			seedsMap[seedKey] = enhanced.map((e) => e.key);
 
-			// Build weightMap for weighted Borda
+			// Build weight map for weighted Borda
 			for (const e of enhanced) {
 				weightMap[e.key] = 1 + e.scoreBoost;
 			}
 		}
 
-		// Remove any empty seeds
+		// Remove empty seeds
 		for (const k of Object.keys(seedsMap)) {
 			if (!Array.isArray(seedsMap[k]) || seedsMap[k].length === 0) {
 				delete seedsMap[k];
 			}
 		}
 
-		// Global fallback if no seeds produced
+		// Global fallback if no seeds produced anything
 		if (Object.keys(seedsMap).length === 0) {
-			const globalTop = await fetchGlobalTopTrack();
-			if (globalTop) {
+			if (sameArtistOnly) {
+				// Try each allowed artist's top track
+				const fallbacks = [];
+				for (const a of allowedArtists) {
+					const top = await fetchArtistTopTrack(a);
+					if (top) {
+						fallbacks.push(top);
+					}
+				}
+				if (fallbacks.length > 0) {
+					return res
+						.status(200)
+						.json({ recommended_tracks: fallbacks.slice(0, 3) });
+				}
 				return res
-					.status(200)
-					.json({ recommended_tracks: [globalTop] });
+					.status(404)
+					.json({
+						error: "No same-artist recommendations available.",
+					});
+			} else {
+				const globalTop = await fetchGlobalTopTrack();
+				if (globalTop) {
+					return res
+						.status(200)
+						.json({ recommended_tracks: [globalTop] });
+				}
+				return res
+					.status(404)
+					.json({ error: "No recommendations available." });
 			}
-			return res
-				.status(404)
-				.json({ error: "No recommendations available." });
 		}
 
-		// Rank by weighted Borda (instead of the old unweighted)
-		//		const rankedKeys = rankByBorda(seedsMap, matchScoreMap);
-		const rankedKeys = rankByWeightedBorda(
+		// Rank by weighted Borda
+		let rankedKeys = rankByWeightedBorda(
 			seedsMap,
 			weightMap,
 			matchScoreMap
 		);
+
+		// Enforce same-artist filter at the very end too (defense-in-depth)
+		if (sameArtistOnly) {
+			rankedKeys = rankedKeys.filter((k) => {
+				const [artist] = k.split(DELIM);
+				return allowedArtists.has(toL(artist));
+			});
+		}
+
+		// If filtering wiped everything, do same-artist fallback
+		if (sameArtistOnly && rankedKeys.length === 0) {
+			const fallbacks = [];
+			for (const a of allowedArtists) {
+				const top = await fetchArtistTopTrack(a);
+				if (top) {
+					fallbacks.push(top);
+				}
+			}
+			if (fallbacks.length > 0) {
+				return res
+					.status(200)
+					.json({ recommended_tracks: fallbacks.slice(0, 3) });
+			}
+			return res
+				.status(404)
+				.json({ error: "No same-artist recommendations available." });
+		}
 
 		const top3 = rankedKeys.slice(0, 3).map((k) => {
 			const [artist, title] = k.split(DELIM);
