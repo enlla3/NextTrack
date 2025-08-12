@@ -1,3 +1,4 @@
+// tests/recommend.test.js
 const request = require("supertest");
 const axios = require("axios");
 const app = require("../server");
@@ -107,7 +108,6 @@ describe("POST /api/recommend", () => {
 	});
 
 	it("ignores invalid track objects and falls back to global", async () => {
-		// No valid title/artist => seedsMap empty
 		// Only global fallback should fire
 		axios.get.mockResolvedValueOnce({
 			data: {
@@ -117,9 +117,7 @@ describe("POST /api/recommend", () => {
 
 		const res = await request(app)
 			.post("/api/recommend")
-			.send({
-				track_ids: [{ name: "MissingFields" }], // invalid entry
-			});
+			.send({ track_ids: [{ name: "MissingFields" }] });
 
 		expect(res.status).toBe(200);
 		expect(res.body).toEqual({
@@ -127,7 +125,7 @@ describe("POST /api/recommend", () => {
 		});
 	});
 
-	it("uses tag-based fallback when similar tracks exist but tags present", async () => {
+	it("uses tag-based fallback when similar tracks missing but tag present", async () => {
 		// searchTrack => no changes
 		axios.get.mockResolvedValueOnce({ data: {} });
 		// fetchSimilarTracks => empty
@@ -154,9 +152,7 @@ describe("POST /api/recommend", () => {
 
 		const res = await request(app)
 			.post("/api/recommend")
-			.send({
-				track_ids: [{ title: "X", artist: "Y" }],
-			});
+			.send({ track_ids: [{ title: "X", artist: "Y" }] });
 
 		expect(res.status).toBe(200);
 		expect(res.body.recommended_tracks).toHaveLength(2);
@@ -184,9 +180,7 @@ describe("POST /api/recommend", () => {
 
 		const res = await request(app)
 			.post("/api/recommend")
-			.send({
-				track_ids: [{ title: "X", artist: "Artist" }],
-			});
+			.send({ track_ids: [{ title: "X", artist: "Artist" }] });
 
 		expect(res.status).toBe(200);
 		expect(res.body.recommended_tracks).toEqual([
@@ -243,8 +237,7 @@ describe("POST /api/recommend", () => {
 				},
 			},
 		});
-		// 3=>5) (fallback calls never used)
-		// 6) scoring fetchTopTags(returnAll=true) ×3
+		// scoring fetchTopTags(returnAll=true) ×3
 		axios.get
 			.mockResolvedValueOnce({
 				data: { toptags: { tag: [{ name: "t" }] } },
@@ -305,15 +298,14 @@ describe("POST /api/recommend", () => {
 				},
 			},
 		});
-		// fallback unused
 		// scoring tags:
 		axios.get
 			.mockResolvedValueOnce({
 				data: { toptags: { tag: [{ name: "english" }] } },
-			}) // for L1
+			}) // L1
 			.mockResolvedValueOnce({
 				data: { toptags: { tag: [{ name: "spanish" }] } },
-			}); // for L2
+			}); // L2
 
 		const res = await request(app)
 			.post("/api/recommend")
@@ -323,19 +315,76 @@ describe("POST /api/recommend", () => {
 			});
 
 		expect(res.status).toBe(200);
-		// L1 should appear before L2
 		const out = res.body.recommended_tracks;
 		expect(out[0]).toEqual({ title: "L1", artist: "LangA" });
 		expect(out[1]).toEqual({ title: "L2", artist: "LangB" });
 	});
 
-	jest.mock("axios");
+	// NEW: same-artist-only filters similar tracks to the seed artist
+	it("honors same_artist_only=true by filtering to the seed artist", async () => {
+		// searchTrack => no correction
+		axios.get.mockResolvedValueOnce({ data: {} });
+		// fetchSimilarTracks => mixed artists
+		axios.get.mockResolvedValueOnce({
+			data: {
+				similartracks: {
+					track: [
+						{ name: "S1", artist: { name: "X" }, match: "0.9" },
+						{ name: "S2", artist: { name: "Y" }, match: "0.8" },
+						{ name: "S3", artist: { name: "X" }, match: "0.7" },
+					],
+				},
+			},
+		});
+		// scoring toptags for kept items (S1, S3)
+		axios.get.mockResolvedValue({ data: { toptags: { tag: [] } } });
 
-	beforeEach(() => axios.get.mockReset());
+		const res = await request(app)
+			.post("/api/recommend")
+			.send({
+				track_ids: [{ title: "Seed", artist: "X" }],
+				preferences: { same_artist_only: true },
+			});
+
+		expect(res.status).toBe(200);
+		expect(res.body.recommended_tracks).toEqual([
+			{ title: "S1", artist: "X" },
+			{ title: "S3", artist: "X" },
+		]);
+	});
+
+	// same-artist-only falls back to artist top track when filter empties list
+	it("same_artist_only falls back to the artist's top track if none match", async () => {
+		// searchTrack => no correction
+		axios.get.mockResolvedValueOnce({ data: {} });
+		// fetchSimilarTracks => empty (or all filtered out)
+		axios.get.mockResolvedValueOnce({ data: {} });
+		// fetchArtistTopTrack => returns one track
+		axios.get.mockResolvedValueOnce({
+			data: {
+				toptracks: {
+					track: { name: "XHit", artist: { name: "X" } },
+				},
+			},
+		});
+		// scoring tags for that one track
+		axios.get.mockResolvedValue({ data: { toptags: { tag: [] } } });
+
+		const res = await request(app)
+			.post("/api/recommend")
+			.send({
+				track_ids: [{ title: "Seed", artist: "X" }],
+				preferences: { same_artist_only: true },
+			});
+
+		expect(res.status).toBe(200);
+		expect(res.body.recommended_tracks).toEqual([
+			{ title: "XHit", artist: "X" },
+		]);
+	});
 
 	it("aggregates across multiple seeds correctly", async () => {
 		// Seed A
-		// 1) searchTrack(A)
 		axios.get.mockResolvedValueOnce({
 			data: {
 				results: {
@@ -343,7 +392,6 @@ describe("POST /api/recommend", () => {
 				},
 			},
 		});
-		// 2) fetchSimilarTracks(A)
 		axios.get.mockResolvedValueOnce({
 			data: {
 				similartracks: {
@@ -353,14 +401,11 @@ describe("POST /api/recommend", () => {
 				},
 			},
 		});
-		// 3) fetchTopTags(returnAll=false) => not needed if we have similar tracks
-		// 4) fetchTopTags(returnAll=true) => for scoring R1
 		axios.get.mockResolvedValueOnce({
 			data: { toptags: { tag: [{ name: "tag1" }] } },
 		});
 
 		// Seed B
-		// 5) searchTrack(B)
 		axios.get.mockResolvedValueOnce({
 			data: {
 				results: {
@@ -368,7 +413,6 @@ describe("POST /api/recommend", () => {
 				},
 			},
 		});
-		// 6) fetchSimilarTracks(B)
 		axios.get.mockResolvedValueOnce({
 			data: {
 				similartracks: {
@@ -378,12 +422,10 @@ describe("POST /api/recommend", () => {
 				},
 			},
 		});
-		// 7) fetchTopTags(returnAll=true) — for scoring R2
 		axios.get.mockResolvedValueOnce({
 			data: { toptags: { tag: [{ name: "tag2" }] } },
 		});
 
-		// Now call the endpoint
 		const res = await request(app)
 			.post("/api/recommend")
 			.send({
