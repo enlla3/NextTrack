@@ -16,7 +16,7 @@ const SIMILAR_LIMIT = 100;
 const SEARCH_LIMIT = 1;
 const DELIM = "|||";
 
-// ------------------ helpers ------------------
+// helpers
 const toL = (s) => (s || "").trim().toLowerCase();
 const sameArtist = (a, b) => toL(a) === toL(b);
 
@@ -215,7 +215,7 @@ function rankByWeightedBorda(seedsMap, weightMap, matchScoreMap) {
 	});
 }
 
-// ================= Main Route =================
+// Main Route
 router.post("/", async (req, res) => {
 	try {
 		const { track_ids, preferences = {} } = req.body;
@@ -225,7 +225,7 @@ router.post("/", async (req, res) => {
 				.json({ error: "track_ids (non-empty array) is required" });
 		}
 
-		// NEW: same-artist-only flag (default false)
+		// same-artist-only flag (default false)
 		const sameArtistOnly = !!preferences.same_artist_only;
 
 		const seedsMap = {};
@@ -254,7 +254,7 @@ router.post("/", async (req, res) => {
 			// Similar (primary)
 			let similarList = await fetchSimilarTracks(title, artist);
 
-			// NEW: if sameArtistOnly, filter right away to the seed artist
+			// if sameArtistOnly, filter right away to the seed artist
 			if (sameArtistOnly && similarList.length > 0) {
 				similarList = similarList.filter((t) =>
 					sameArtist(t.artist, artist)

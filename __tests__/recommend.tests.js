@@ -1,4 +1,3 @@
-// tests/recommend.test.js
 const request = require("supertest");
 const axios = require("axios");
 const app = require("../server");

@@ -1,11 +1,7 @@
-/**
- * @jest-environment node
- */
-
 const request = require("supertest");
 const express = require("express");
 
-// --- 1) MOCK console.error to suppress route errors in test logs ---
+// 1) mock console.error to suppress route errors in test logs
 beforeAll(() => {
 	jest.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -13,11 +9,11 @@ afterAll(() => {
 	console.error.mockRestore();
 });
 
-// --- 2) MOCK yt-search ---
+// 2) mock yt-search
 jest.mock("yt-search");
 const ytSearch = require("yt-search");
 
-// --- 3) CREATE A MINI APP that only mounts ytSearchRoute ---
+// 3) create a mini app that only mounts ytSearchRoute
 const app = express();
 app.use(express.json());
 const ytSearchRoute = require("../routes/ytSearch");

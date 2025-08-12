@@ -1,8 +1,8 @@
 const express = require("express");
 const axios = require("axios");
-
 const router = express.Router();
 
+// ensure API key is set
 const LASTFM_API_KEY = process.env.LASTFM_API_KEY;
 if (!LASTFM_API_KEY) {
 	console.error(
@@ -11,6 +11,7 @@ if (!LASTFM_API_KEY) {
 	process.exit(1);
 }
 
+// API and limit settings
 const LASTFM_BASE_URL = "http://ws.audioscrobbler.com/2.0/";
 const SEARCH_FETCH_LIMIT = 30;
 const TOPTRACKS_LIMIT = 50;
@@ -18,8 +19,10 @@ const OUTPUT_LIMIT_MAX = 50;
 const TAG_LOOKUPS_MAX = 25;
 const TIMEOUT_MS = 10000;
 
+// helper
 const toL = (s) => (s || "").trim().toLowerCase();
 
+// search tracks by title only
 async function searchByTitleOnly(
 	title,
 	{ page = 1, limit = SEARCH_FETCH_LIMIT }
@@ -41,15 +44,17 @@ async function searchByTitleOnly(
 		const arr = Array.isArray(matches) ? matches : matches ? [matches] : [];
 		return arr.map((t) => ({ title: t.name, artist: t.artist }));
 	} catch {
-		return [];
+		return []; // on error, return empty
 	}
 }
 
+// get top tracks for a given artist
 async function topTracksByArtistOnly(
 	artist,
 	{ page = 1, limit = TOPTRACKS_LIMIT }
 ) {
 	try {
+		// find best matching artist
 		const search = await axios.get(LASTFM_BASE_URL, {
 			params: {
 				method: "artist.search",
@@ -64,6 +69,7 @@ async function topTracksByArtistOnly(
 		const best = Array.isArray(hits) ? hits[0] : hits;
 		const resolvedArtist = best?.name || artist;
 
+		// fetch top tracks for that artist
 		const top = await axios.get(LASTFM_BASE_URL, {
 			params: {
 				method: "artist.getTopTracks",
@@ -83,10 +89,11 @@ async function topTracksByArtistOnly(
 			artist: t.artist?.name || resolvedArtist,
 		}));
 	} catch {
-		return [];
+		return []; // on error, return empty
 	}
 }
 
+// fetch top tags for a track
 async function fetchTopTags(title, artist) {
 	try {
 		const resp = await axios.get(LASTFM_BASE_URL, {
@@ -104,16 +111,18 @@ async function fetchTopTags(title, artist) {
 		const arr = Array.isArray(tags) ? tags : tags ? [tags] : [];
 		return arr.map((t) => toL(t.name));
 	} catch {
-		return [];
+		return []; // on error, return empty
 	}
 }
 
+// filter tracks by language tag
 async function filterByLanguage(tracks, language) {
 	const wanted = toL(language);
 	if (!wanted) {
 		return tracks;
 	}
 
+	// limit tag lookups
 	const limited = tracks.slice(0, TAG_LOOKUPS_MAX);
 	const checks = await Promise.all(
 		limited.map(async (t) => {
@@ -122,9 +131,11 @@ async function filterByLanguage(tracks, language) {
 		})
 	);
 
+	// return only matching tracks
 	return checks.filter((c) => c.ok).map((c) => c.t);
 }
 
+// main endpoint: search by title or artist
 router.post("/", async (req, res) => {
 	try {
 		const {
@@ -140,12 +151,14 @@ router.post("/", async (req, res) => {
 		);
 		const pageNum = Math.max(1, Number(page) || 1);
 
+		// require exactly one of title or artist
 		if ((!title && !artist) || (title && artist)) {
 			return res.status(400).json({
 				error: "Provide exactly one of 'title' or 'artist'. Optional: 'language', 'limit', 'page'.",
 			});
 		}
 
+		// fetch candidates
 		let candidates = [];
 		if (title) {
 			candidates = await searchByTitleOnly(title, {
@@ -159,10 +172,12 @@ router.post("/", async (req, res) => {
 			});
 		}
 
+		// apply language filter if provided
 		if (language) {
 			candidates = await filterByLanguage(candidates, language);
 		}
 
+		// slice to output limit
 		const results = candidates.slice(0, outLimit);
 		return res
 			.status(200)
