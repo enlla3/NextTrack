@@ -1,4 +1,3 @@
-// routes/recommend.js
 const express = require("express");
 const axios = require("axios");
 
@@ -348,11 +347,9 @@ router.post("/", async (req, res) => {
 						.status(200)
 						.json({ recommended_tracks: fallbacks.slice(0, 3) });
 				}
-				return res
-					.status(404)
-					.json({
-						error: "No same-artist recommendations available.",
-					});
+				return res.status(404).json({
+					error: "No same-artist recommendations available.",
+				});
 			} else {
 				const globalTop = await fetchGlobalTopTrack();
 				if (globalTop) {

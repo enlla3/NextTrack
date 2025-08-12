@@ -5,6 +5,7 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const recommendRoute = require("./routes/recommend");
 const ytSearchRoute = require("./routes/ytSearch");
+const findTracksRoute = require("./routes/findTracks");
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use(express.json());
 
 app.use("/api/recommend", recommendRoute);
 app.use("/api/yt-search", ytSearchRoute);
+app.use("/api/find-tracks", findTracksRoute);
 
 // Only start listening when run directly
 if (require.main === module) {
